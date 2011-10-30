@@ -146,7 +146,7 @@ factorParser =
 inputParser :: Parser ([(String, StrTerm)], StrTerm)
 inputParser = do
     skipSpace
-    binds <- many1 $ do
+    binds <- many $ do
         n <- getName
         getResToken "="
         t <- absParser
@@ -194,7 +194,7 @@ absPpr, appPpr, factorPpr :: StrTerm' ->
 
 absPpr t@(TAbs _ _) = do
     let (vs, t') = destructAbs t
-        pStr = "\\" ++ concatMap (\(s, n) -> s ++ show n ++ " ") vs ++ ". "
+        pStr = "\\" ++ unwords (map (\(s, n) -> s ++ show n) vs) ++ ". "
     (names, term, redex) <- appPpr t'
     return (map (map (const ' ') pStr ++) names,
         pStr ++ term, map (map (const ' ') pStr ++) redex)
@@ -233,8 +233,7 @@ factorPpr (TName name) = do
     nstr <- gets (show . fst)
     modify (first succ)
     let n = maximum [length name, length nstr, 1]
-        f = paddingh n
-    return ([f nstr, f "|"], f name, [])
+    return ([paddingh n nstr], paddingh n name, [])
 factorPpr (TVar (v, n)) = return ([], v ++ show n, [])
 factorPpr (TUVar v) = return ([], v, [])
 factorPpr t = do
@@ -245,7 +244,8 @@ factorPpr t = do
 putTerm :: StrTerm' -> IO ()
 putTerm t =
     let (binds, term, redex) = evalState (absPpr t) (0, 0) in
-    mapM_ (putStrLn . ("< " ++)) (binds ++ [term] ++ redex)
+    mapM_ (putStrLn . ("< " ++) . reverse . dropWhile (' ' ==) . reverse)
+        (binds ++ [term] ++ redex)
 
 -- main
 
