@@ -1,0 +1,13 @@
+Succ  = \n f x. f (n f x),
+
+Zero  = \f x. x,
+One   = \f x. f x,
+Two   = \f x. f (f x),
+Three = \f x. f (f (f x)),
+Four  = \f x. f (f (f (f x))),
+Five  = \f x. f (f (f (f (f x)))),
+
+Add   = \m n f x. m f (n f x),
+Mul   = \m n f. m (n f),
+Exp   = \m n. n m,
+Exp Two Three
