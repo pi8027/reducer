@@ -35,6 +35,7 @@ type History = Zipper StrTermState
 
 data Operation
     = OpReduction Int
+    | OpOReduction Int
     | OpExpand Int
     | OpUndo
     | OpRedo
@@ -75,6 +76,13 @@ reduction (TApp t1 t2) =
         _ -> []
 reduction (TAbs v t) = map (TAbs v) (reduction t)
 reduction _ = []
+
+oreduction :: Eq v => Term' v n -> Int -> Term' v n
+oreduction t 0 = t
+oreduction t n =
+    case reduction t of
+        [] -> t
+        t' : _ -> oreduction t' (pred n)
 
 -- expand
 
@@ -154,19 +162,22 @@ inputParser = do
         return (n, t)
     (,) binds <$> absParser <* endOfInput
 
-natParser :: Parser Int
+natParser, natParser' :: Parser Int
 natParser =
-    (read . BS.unpack <$> AP.takeWhile1 AP.isDigit) <|> return 0 <* skipSpace
+    (read . BS.unpack <$> AP.takeWhile1 AP.isDigit) <* skipSpace
+natParser' = natParser <|> return 0
+
 
 opParser :: Parser Operation
 opParser =
     skipSpace *>
-    ((getResToken "#" >> OpReduction <$> natParser) <|>
-    (getResToken "!" >> OpExpand <$> natParser) <|>
+    ((getResToken "@" >> OpReduction <$> natParser') <|>
+    (getResToken "#" >> OpOReduction <$> natParser) <|>
+    (getResToken "!" >> OpExpand <$> natParser') <|>
     OpUndo <$ getResToken "u" <|>
     OpRedo <$ getResToken "r" <|>
     OpQuit <$ getResToken "q" <|>
-    OpHelp <$ getResToken "h" <|>
+    OpHelp <$ getResToken "?" <|>
     return OpNull)
     <* endOfInput
 
@@ -272,6 +283,8 @@ prompt env history@(old, current, new) = do
                 [] -> do
                     putStrLn "Error: Specified beta-redex is not found."
                     prompt env history
+        Done _ (OpOReduction n) ->
+            prompt env (current : old, (oreduction (fst current) n, snd current), [])
         Done _ (OpExpand n) ->
             case drop n (expand env current) of
                 state : _ -> prompt env (current : old, state, [])
@@ -289,14 +302,15 @@ prompt env history@(old, current, new) = do
         Done _ OpQuit -> return ()
         Done _ OpHelp -> do
             mapM_ putStrLn
-                ["#<number>: reduce specified beta-redex",
+                ["@<number>: reduce specified beta-redex",
+                 "#<number>: outermost reduction",
                  "!<number>: expand specified subterm",
-                 "#:         same as \"#0\"",
+                 "@:         same as \"#0\"",
                  "!:         same as \"!0\"",
                  "u:         undo",
                  "r:         redo",
                  "q:         quit",
-                 "h:         help"]
+                 "?:         help"]
             prompt env history
         Done _ OpNull -> prompt env history
         err -> do
@@ -305,8 +319,7 @@ prompt env history@(old, current, new) = do
 
 main :: IO ()
 main = do
-    mapM_ putStrLn
-        ["A Beta-Reducer  input \"h\" for help"]
+    putStrLn "A Beta-Reducer  input \"?\" for help"
     args <- getArgs
     case args of
         [] -> return ()
