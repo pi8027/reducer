@@ -2,6 +2,7 @@
 module Main where
 
 import Data.Char
+import Data.List
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import qualified Data.ByteString.Char8 as BS
@@ -116,12 +117,43 @@ names _ = Set.empty
 
 -- validate input
 
-validate :: [(String, StrTerm)] -> StrTerm -> Bool
+validateFV :: [(String, StrTerm)] -> [(String, Set.Set String)]
+validateFV binds =
+    [(name, fvs) | (name, term) <- binds, let fvs = fv term, not $ Set.null fvs]
+
+validateDup :: [String] -> [String]
+validateDup [] = []
+validateDup (n : ns)
+    | n `elem` ns = n : validateDup (filter (/= n) ns)
+    | otherwise = validateDup ns
+
+validateName :: [(String, StrTerm)] -> StrTerm ->
+    ([(String, Set.Set String)], Set.Set String)
+validateName binds term =
+    (validateName' binds,
+    Set.difference (names term) (Set.fromList (map fst binds)))
+
+validateName' :: [(String, StrTerm)] -> [(String, Set.Set String)]
+validateName' [] = []
+validateName' ((name, term) : binds) =
+    let (l, names) = validateName binds term in
+        if Set.null names then l else (name, names) : l
+
+validate :: [(String, StrTerm)] -> StrTerm -> IO Bool
 validate binds term =
-    all (Set.null . fv . snd) binds &&
-    Set.null (Set.difference
-        (foldr (Set.union . names . snd) (names term) binds)
-        (Set.fromList (map fst binds)))
+    case (validateFV binds,
+            validateDup (map fst binds),
+            validateName (reverse binds) term) of
+        ([], [], ([], s)) | Set.null s -> return True
+        (fvs, dups, (namesB, namesT)) -> do
+            putStrLn "\nInput has some error(s)."
+            forM_ fvs $ \(n, vs) -> putStrLn $
+                n ++ " has free variable(s): " ++ unwords (Set.toList vs)
+            unless (null dups)
+                (putStrLn ("Name duplication: " ++ unwords dups))
+            forM_ (namesB ++ [("_", namesT)]) $ \(n, names) -> putStrLn $
+                n ++ " has unbound name(s): " ++ unwords (Set.toList names)
+            return False
 
 -- parser
 
@@ -149,7 +181,7 @@ appParser = liftM2 (foldl TApp) factorParser (many factorParser)
 
 factorParser =
     (getResToken "(" *> absParser <* getResToken ")") <|>
-    TVar <$> getVar <|> TName <$> getName
+    TUVar <$> getVar <|> TName <$> getName
 
 inputParser :: Parser ([(String, StrTerm)], StrTerm)
 inputParser = do
@@ -198,7 +230,7 @@ paddingv (names1, term1, redex1) (names2, term2, redex2) =
         rn = max (length redex1) (length redex2)
         sp n t = replicate n (map (const ' ') t) in
     (padding names1 (sp nn term1), term1, padding redex1 (sp rn term1),
-     padding names2 (sp nn term2), term2, padding redex2 (sp rn term2))
+    padding names2 (sp nn term2), term2, padding redex2 (sp rn term2))
 
 absPpr, appPpr, factorPpr :: StrTerm' ->
     State (Int, Int) ([String], String, [String])
@@ -274,7 +306,8 @@ prompt :: Map.Map String StrTerm -> History -> IO ()
 prompt env history@(old, current, new) = do
     putStrLn ""
     putTerm $ fst current
-    putStr "lambda>" >> hFlush stdout
+    putStr $ "lambda<" ++ show (length old) ++ ", " ++ show (length new) ++ ">"
+    hFlush stdout
     op <- getOpepation
     case op of
         Done _ (OpReduction n) ->
@@ -301,16 +334,16 @@ prompt env history@(old, current, new) = do
                 [] -> prompt env history
         Done _ OpQuit -> return ()
         Done _ OpHelp -> do
-            mapM_ putStrLn
-                ["@<number>: reduce specified beta-redex",
-                 "#<number>: outermost reduction",
-                 "!<number>: expand specified subterm",
-                 "@:         same as \"#0\"",
-                 "!:         same as \"!0\"",
-                 "u:         undo",
-                 "r:         redo",
-                 "q:         quit",
-                 "?:         help"]
+            mapM_ putStrLn [
+                "@<number>: reduce specified beta-redex",
+                "#<number>: outermost reduction",
+                "!<number>: expand specified subterm",
+                "@:         same as \"#0\"",
+                "!:         same as \"!0\"",
+                "u:         undo",
+                "r:         redo",
+                "q:         quit",
+                "?:         help"]
             prompt env history
         Done _ OpNull -> prompt env history
         err -> do
@@ -319,16 +352,17 @@ prompt env history@(old, current, new) = do
 
 main :: IO ()
 main = do
-    putStrLn "A Beta-Reducer  input \"?\" for help"
+    putStrLn "A Beta-Reducer"
     args <- getArgs
     case args of
         [] -> return ()
         file : _ -> do
             contents <- BS.readFile file
             case parse' inputParser contents of
-                Done _ (binds, term) | validate binds term ->
-                    prompt (Map.fromList binds)
-                        ([], runState (alpha term) Map.empty, [])
-                Done _ result -> putStrLn "invalid input."
+                Done _ (binds, term) ->
+                    validate binds term >>= flip when
+                        (putStrLn "input \"?\" for help" >>
+                            prompt (Map.fromList binds)
+                                ([], runState (alpha term) Map.empty, []))
                 err -> print err
 
