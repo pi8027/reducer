@@ -6,7 +6,7 @@ import Data.List
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import qualified Data.ByteString.Char8 as BS
-import Data.Attoparsec.Char8 as AP hiding (many)
+import Data.Attoparsec.Char8 as AP
 import Control.Applicative
 import Control.Monad.Reader
 import Control.Monad.State
@@ -292,15 +292,12 @@ putTerm t =
 
 -- main
 
-parse' :: Parser a -> BS.ByteString -> Result a
-parse' p s = feed (parse p s) BS.empty
-
-getOpepation :: IO (Result Operation)
+getOpepation :: IO (Either String Operation)
 getOpepation = do
     eof <- isEOF
     if eof
-        then return $ Done BS.empty OpQuit
-        else parse' opParser <$> BS.getLine
+        then return $ Right OpQuit
+        else parseOnly opParser <$> BS.getLine
 
 prompt :: Map.Map String StrTerm -> History -> IO ()
 prompt env history@(old, current, new) = do
@@ -310,30 +307,33 @@ prompt env history@(old, current, new) = do
     hFlush stdout
     op <- getOpepation
     case op of
-        Done _ (OpReduction n) ->
+        Left err -> do
+            putStrLn err
+            prompt env history
+        Right (OpReduction n) ->
             case drop n (reduction (fst current)) of
                 term : _ -> prompt env (current : old, (term, snd current), [])
                 [] -> do
                     putStrLn "Error: Specified beta-redex is not found."
                     prompt env history
-        Done _ (OpOReduction n) ->
+        Right (OpOReduction n) ->
             prompt env (current : old, (oreduction (fst current) n, snd current), [])
-        Done _ (OpExpand n) ->
+        Right (OpExpand n) ->
             case drop n (expand env current) of
                 state : _ -> prompt env (current : old, state, [])
                 [] -> do
                     putStrLn "Error: Specified subterm is not found."
                     prompt env history
-        Done _ OpUndo ->
+        Right OpUndo ->
             case old of
                 o : os -> prompt env (os, o, current : new)
                 [] -> prompt env history
-        Done _ OpRedo ->
+        Right OpRedo ->
             case new of
                 n : ns -> prompt env (current : old, n, ns)
                 [] -> prompt env history
-        Done _ OpQuit -> return ()
-        Done _ OpHelp -> do
+        Right OpQuit -> return ()
+        Right OpHelp -> do
             mapM_ putStrLn [
                 "@<number>: reduce specified beta-redex",
                 "#<number>: outermost reduction",
@@ -345,10 +345,7 @@ prompt env history@(old, current, new) = do
                 "q:         quit",
                 "?:         help"]
             prompt env history
-        Done _ OpNull -> prompt env history
-        err -> do
-            print err
-            prompt env history
+        Right OpNull -> prompt env history
 
 main :: IO ()
 main = do
@@ -358,11 +355,11 @@ main = do
         [] -> return ()
         file : _ -> do
             contents <- BS.readFile file
-            case parse' inputParser contents of
-                Done _ (binds, term) ->
+            case parseOnly inputParser contents of
+                Left err -> putStrLn err
+                Right (binds, term) ->
                     validate binds term >>= flip when
                         (putStrLn "input \"?\" for help" >>
                             prompt (Map.fromList binds)
                                 ([], runState (alpha term) Map.empty, []))
-                err -> print err
 
